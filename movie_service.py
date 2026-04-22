@@ -6,7 +6,7 @@ import re
 import time
 import unicodedata
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import Optional
 from urllib.parse import quote
@@ -21,6 +21,7 @@ SCHEDULE_SNAPSHOT_KEY = "metrograph_schedule"
 LETTERBOXD_FRIENDS_PATH = os.path.join(os.path.dirname(__file__), "data", "letterboxd_friends.json")
 LETTERBOXD_USERNAME = "gbonez100"
 ENABLE_LETTERBOXD = os.getenv("ENABLE_LETTERBOXD", "true").lower() == "true"
+LETTERBOXD_REFRESH_SKIP_DAYS = int(os.getenv("LETTERBOXD_REFRESH_SKIP_DAYS", "7"))
 METROGRAPH_CALENDAR_URL = "https://metrograph.com/nyc/"
 LETTERBOXD_BASE_URL = "https://letterboxd.com"
 LETTERBOXD_FRIEND_USERNAMES_ENV = [
@@ -710,6 +711,17 @@ def _find_movie_entry(db: Session, normalized_title: str, year: Optional[int]) -
     return query.filter(MovieLetterboxdData.year.is_(None)).first()
 
 
+def _was_scanned_recently(entry: Optional[MovieLetterboxdData]) -> bool:
+    if entry is None or entry.last_scanned_at is None:
+        return False
+
+    last_scanned_at = entry.last_scanned_at
+    if last_scanned_at.tzinfo is None:
+        last_scanned_at = last_scanned_at.replace(tzinfo=timezone.utc)
+
+    return last_scanned_at >= datetime.now(timezone.utc) - timedelta(days=LETTERBOXD_REFRESH_SKIP_DAYS)
+
+
 def _find_movie_entry_from_lookups(search_title: str, year: Optional[int], entries_by_key: dict, entries_by_title: defaultdict) -> Optional[MovieLetterboxdData]:
     normalized_title = _norm(search_title)
     entry = entries_by_key.get((normalized_title, year))
@@ -1042,6 +1054,7 @@ def update_letterboxd_table(db: Session) -> dict:
 
     processed_components = set()
     updated_movies = 0
+    skipped_movies = 0
     new_watchlist_entries = []
 
     for index, (title, year) in enumerate(unique_films, start=1):
@@ -1058,12 +1071,19 @@ def update_letterboxd_table(db: Session) -> dict:
             processed_components.add(component_key)
             _log(f"    Component sync: {component['title']}")
 
+            entry = _find_movie_entry(db, normalized_title, year)
+            if _was_scanned_recently(entry):
+                skipped_movies += 1
+                _log(
+                    f"    Skipping {component['title']} - scanned within the last {LETTERBOXD_REFRESH_SKIP_DAYS} days"
+                )
+                continue
+
             watchlist_path = watchlist.get(normalized_title)
             public_rating = _fetch_letterboxd_rating(component["search_title"], year, watchlist_path, director=film_director)
             personal = _fetch_member_film_data(LETTERBOXD_USERNAME, component["search_title"], year, director=film_director)
             is_on_watchlist = normalized_title in watchlist
 
-            entry = _find_movie_entry(db, normalized_title, year)
             is_new_entry = entry is None
             if entry is None:
                 entry = MovieLetterboxdData(
@@ -1121,7 +1141,8 @@ def update_letterboxd_table(db: Session) -> dict:
         "enabled": True,
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "updated_movies": updated_movies,
+        "skipped_movies": skipped_movies,
         "friend_profiles": len(friend_profiles),
         "new_watchlist_entries": new_watchlist_entries,
-        "message": f"Updated stored Letterboxd data for {updated_movies} Metrograph films.",
+        "message": f"Updated stored Letterboxd data for {updated_movies} Metrograph films and skipped {skipped_movies} recently scanned films.",
     }
