@@ -4,17 +4,13 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
-import sys
 import time
 from datetime import datetime, timezone
-from pathlib import Path
 
 import requests
 
-MAIN_REPO_URL = os.getenv("MAIN_REPO_URL", "https://github.com/gbonez/Subway-Tracker.git")
-MAIN_REPO_REF = os.getenv("MAIN_REPO_REF", "main")
-MAIN_REPO_CHECKOUT = Path(os.getenv("MAIN_REPO_CHECKOUT", "/tmp/Subway-Tracker"))
+from models import SessionLocal, init_db
+from movie_service import run_movie_refresh_pipeline
 
 MY_PHONE_NUMBER = os.getenv("MY_PHONE_NUMBER", "+15132268634")
 SELFPING_API_KEY = os.getenv("SELFPING_API_KEY")
@@ -29,58 +25,6 @@ def log_event(message: str, **details) -> None:
     if details:
         payload["details"] = details
     print(json.dumps(payload), flush=True)
-
-
-def resolve_main_repo_root() -> Path:
-    local_candidate = Path(__file__).resolve().parent.parent
-    if (local_candidate / "models.py").exists() and (local_candidate / "services" / "movie_service.py").exists():
-        return local_candidate
-
-    return ensure_main_repo_checkout()
-
-
-def ensure_main_repo_checkout() -> Path:
-    checkout_path = MAIN_REPO_CHECKOUT
-
-    if (checkout_path / "models.py").exists() and (checkout_path / "services" / "movie_service.py").exists():
-        log_event("Refreshing checked out main repo", path=str(checkout_path), ref=MAIN_REPO_REF)
-        subprocess.run(
-            ["git", "-C", str(checkout_path), "fetch", "--depth", "1", "origin", MAIN_REPO_REF],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        subprocess.run(
-            ["git", "-C", str(checkout_path), "reset", "--hard", "FETCH_HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return checkout_path
-
-    checkout_path.parent.mkdir(parents=True, exist_ok=True)
-    if checkout_path.exists():
-        subprocess.run(["rm", "-rf", str(checkout_path)], check=True)
-
-    log_event("Cloning main repo for movie job", repo=MAIN_REPO_URL, ref=MAIN_REPO_REF, path=str(checkout_path))
-    subprocess.run(
-        ["git", "clone", "--depth", "1", "--branch", MAIN_REPO_REF, MAIN_REPO_URL, str(checkout_path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return checkout_path
-
-
-def load_main_repo_modules():
-    repo_root = resolve_main_repo_root()
-    if str(repo_root) not in sys.path:
-        sys.path.insert(0, str(repo_root))
-
-    from models import SessionLocal, init_db
-    from services.movie_service import run_movie_refresh_pipeline
-
-    return SessionLocal, init_db, run_movie_refresh_pipeline
 
 
 def format_watchlist_alert(movies: list[dict]) -> str:
@@ -132,7 +76,6 @@ def send_watchlist_text(message: str) -> None:
 def run_movies_job() -> dict:
     started_at = time.perf_counter()
     log_event("Starting movies cron job")
-    SessionLocal, init_db, run_movie_refresh_pipeline = load_main_repo_modules()
     init_db()
     db = SessionLocal()
     try:
