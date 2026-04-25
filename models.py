@@ -83,3 +83,16 @@ class MovieScheduleSnapshot(Base):
     snapshot_key = Column(String, nullable=False, unique=True, index=True)
     payload = Column(JSON, nullable=False)
     updated_at = Column(DateTime, nullable=False)
+
+
+class MovieUser(Base):
+    __tablename__ = "movie_users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, nullable=False, unique=True, index=True)
+    letterboxd_username = Column(String, nullable=False, index=True)
+    phone_number = Column(String, nullable=True)
+    sync_in_progress = Column(Boolean, nullable=False, default=False)
+    friend_sync_pending = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
